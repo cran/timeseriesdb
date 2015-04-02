@@ -1,58 +1,61 @@
 #' Read Time Series From PostgreSQL database
 #' 
 #' This function reads a time series from a postgres database,
-#' that key value pair storage (hstore), to archive time series.
+#' that uses key value pair storage (hstore), to archive time series.
 #' After reading the information from the database a standard
 #' R time series object of class 'ts' is built and returned. 
 #' 
 #' @author Matthias Bannert, Gabriel Bucur
-#' @param series character representation of the key of the time series
+#' @param series character vector of series names.
 #' @param con a PostgreSQL connection object
-#' @param tbl character string denoting the name of the main time series table
-#' in the PostgreSQL database.
-#' @param meta_unlocalized logical look for unlocalized meta information in the database. Defaults to FALSE
-#' @param meta_localized look for localized meta information: either "no", "all", or specific country abbreviation. defaults to "no". 
+#' @param tbl character string denoting the name of the view
+#' containing the json records.
+#' @param schema SQL schema name. Defaults to timeseries.
+#' @importFrom DBI dbGetQuery
+#' @importFrom RJSONIO fromJSON
 #' @export
-readTimeSeries <- function(series,
-                           con = options()$TIMESERIESDB_CON,
-                           meta_unlocalized = F,
-                           meta_localized = F,tbl = "timeseries_main"){
+readTimeSeries <- function(series,con,tbl = "v_timeseries_json",
+                     schema = "timeseries"){
+  # Create a WHERE IN SQL clause, cast to json to text
+  # so RS-DBI doesn't issue a warning cause it does not know
+  # json
+  series <- paste(paste0("'",series,"'"),collapse=",")
+  sql_query <- sprintf("SELECT ts_json_records::text FROM %s.%s WHERE ts_key IN (%s)",schema,tbl,series)
+  out <- DBI::dbGetQuery(con,sql_query)$ts_json_records
   
-  if(is.null(con)) stop('Default TIMESERIESDB_CON not set in options() or no proper connection given to the con argument.')
+  # identify text as json and create a list of 
+  # time series 
+  jsn_li <- lapply(out,function(x){
+    RJSONIO::fromJSON(x)
+  })
+  # store time series as names for the output list
+  # later on
+  nms <- unlist(lapply(jsn_li,"[[","ts_key"))
   
-  
-  # Because we cannot really use a global binding to 
-  # the postgreSQL connection object which does not exist at the time
-  # of compilation, we use the character name of the object here. 
-  
-  # extract data from hstore 
-  sql_statement_data <- sprintf("SELECT (each(ts_data)).key, (each(ts_data)).value FROM %s WHERE ts_key = '%s'",tbl,series)
-  # get freq
-  sql_statement_freq <- sprintf("SELECT ts_frequency FROM %s WHERE ts_key = '%s'",tbl,series)
-  freq <- DBI::dbGetQuery(con,sql_statement_freq)
-  out <- DBI::dbGetQuery(con,sql_statement_data)
-  
-  # create R time series object
-  # find start date first
-  out$key <- as.Date(out$key)
-  start_date <- min(out$key)
-  year <- as.numeric(format(as.Date(start_date), "%Y"))
-  
-  # check whether it's quarterly or monthly time series 
-  # in order to return a proper period when converting it to a YYYY-mm-dd format.
-  if (freq == 4){
-    period <- (as.numeric(format(as.Date(start_date), "%m")) -1) / 3 + 1
-   } else if(freq == 12) {
-    period <- as.numeric(format(as.Date(start_date), "%m"))
-   } else {
-    stop("Not a standard frequency.")
-   }
-   
-  # return a time series object
-  ts(as.numeric(out$value),
-     start =c(year,period),
-     frequency = as.numeric(freq))
-  
-  
+  # create time series objects
+  out_li <- lapply(jsn_li,function(x){
+    freq <- "[["(x,"ts_frequency")
+    ts_data <- "[["(x,"ts_data")
+    d <- as.Date(names(ts_data)[1])
+    y <- as.numeric(format(d,"%Y"))
+    p <- as.numeric(format(d,"%m"))
+    if(freq == 4){
+      period <- (p -1) / 3 + 1
+    } else if(freq == 12){
+      period <- p
+    } else if(freq == 1){
+      period <- NULL
+    } else {
+      stop("Not a standard frequency.")
+    }
+    
+    # create the time series object but suppress the warning of creating NAs
+    # when transforming text NAs to numeric NAs
+    suppressWarnings(ts(as.numeric(ts_data),
+                        start=c(y,period),
+                        frequency = freq))
+  })
+  names(out_li) <- nms
+  class(out_li) <- append(class(out_li),"tslist")
+  return(out_li)
 }
-

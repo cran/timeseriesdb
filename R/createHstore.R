@@ -6,7 +6,9 @@
 #' @title Create Hstore
 #' @param x a time series object, a two column data frame or object of S3 class
 #' miro (meta information for R objects).
-#' @param ... optional arguments, e.g. position of the key col and
+#' @param ... optional arguments, fct = TRUE create text expressions of hstore function calls.
+#' also for data.frames key_pos and value_pos could be given if they are different from 1 and 2. 
+#'  e.g. position of the key col and
 #' pasition of the value col in a data.frame.
 #' @examples
 #' ts1 <- ts(rnorm(100),start = c(1990,1),frequency = 4)
@@ -45,43 +47,36 @@ createHstore.data.frame <- function(x,...){
 #' @rdname createHstore
 #' @export
 createHstore.list <- function(x,...){
+  dot_args <- list(...)
   # check if list is more than 2 dim
-  if(depth(x) != 1) stop('Only key-value pairs are accepted,
+  if(getListDepth(x) != 1) stop('Only key-value pairs are accepted,
                          this list has too many dimensions!') 
   
   if(is.null(names(x))) stop('Only named lists are accepted.')
   
-  paste(sprintf('"%s"=>"%s"',
-                names(x),
-                as.character(unlist(x))),
-        collapse=",")
+  # the => operator is deprecated in 
+  # Postgres so if you want to use the new version function
+  # based version use fct = T
+  # the operator will be kept alive as long as postgres does 
+  # the same 
+  deprecated_hstore_operator <- paste(sprintf('"%s"=>"%s"',
+                                              names(x),
+                                              as.character(unlist(x))),
+                                      collapse=",")
+  
+  if(exists("fct",dot_args)){
+    if(dot_args$fct){
+      paste(sprintf("hstore('%s','%s')",
+                    names(x),
+                    as.character(unlist(x))),
+            collapse="||")  
+    } else{
+      deprecated_hstore_operator
+    }
+    
+  } else {
+    deprecated_hstore_operator
+  }
+  
 }
-
-
-#' @rdname createHstore
-#' @export
-createHstore.miro <- function(x,...){
-  if(is.null(names(x))) stop('Language needs to be
-                             specified by name the
-                             key value pair list!')
-  
-  if(depth(x) != 2) stop('input is not proper
-                         Meta Information for R Object!')
-  
-  l <- length(names(x))
-  
-  out <- lapply(x,createHstore)
-  class(out) <- c('list_of_hstores','list')
-  out
-  
-}
-
-
-
-
-
-
-
-
-
 
