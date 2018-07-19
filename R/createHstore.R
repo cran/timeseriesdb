@@ -20,25 +20,53 @@ createHstore <- function(x,...) UseMethod("createHstore")
 #' @rdname createHstore
 #' @export
 createHstore.ts <- function(x,...){
-  tm <- time(x)
-  paste(sprintf('"%s"=>"%s"',
-                zooLikeDateConvert(tm),
-                as.character(x)),
-        collapse=",")
+  # '1900-01-01 => -0.395131869823009, 1900-01-02 => -0.395131869823009, ...'::hstore
+  tm <- zoo::index(x)
+  
+  # TODO: 1) This also has 16 digits for whole numbers
+  #       2) How many digits are really necessary?
+  paste0("'", 
+         paste(sprintf("%s => %.16f", indexToDate(tm, as.string = TRUE), x),
+               collapse=", "),
+         "'::hstore")
 }
 
 #' @rdname createHstore
 #' @export
-createHstore.data.frame <- function(x,...){
-  # only allow to cols because its KEY => VALUE
-  if(!exists('key_pos')) key_pos <- 1
-  if(!exists('value_pos')) value_pos <- 2
+createHstore.zoo <- function(x,...){
+  tm <- zoo::index(x)
   
+  if(class(tm) == "Date") {
+    tm <- as.character(tm)
+  # Index can also be character in which case we need not do anything
+  } else if(class(tm) %in% c("numeric", "yearmon", "yearqtr")) {
+    tm <- indexToDate(as.numeric(tm), as.string = TRUE)
+  }
+  paste0("'", 
+         paste(sprintf("%s => %.16f", tm, x),
+               collapse=", "),
+         "'::hstore")
+}
+
+
+
+
+#' @rdname createHstore
+#' @export
+createHstore.data.frame <- function(x, ...){
+  
+  if(is.null(key_col_index)) key_col_index <- 1
+  
+  # only allow to cols because its KEY => VALUE
   stopifnot(ncol(x) == 2)
   
+  # figure out the value column
+  # since we only have two cols it must be 1 or 2 depending on the key col
+  val_col_index <- `if`(key_col_index[1] == 1, 2, 1)
+  
   paste(sprintf('"%s"=>"%s"',
-                as.character(x[,key_pos]),
-                as.character(x[,value_pos])),
+                as.character(x[,key_col_index]),
+                as.character(x[,val_col_index])),
         collapse=",")
 }
 
@@ -59,12 +87,19 @@ createHstore.list <- function(x,...){
   # based version use fct = T
   # the operator will be kept alive as long as postgres does 
   # the same 
+  
+  # 2017 Edit: deprecation was a misunderstanding
+  # calling the hstore function everytime is not good. better use => !!!
+  # being able to use hstore might be useful for some cases too, 
+  # naming 'deprecated is unfortunate' might change naming at some point. 
   deprecated_hstore_operator <- paste(sprintf('"%s"=>"%s"',
                                               names(x),
                                               as.character(unlist(x))),
                                       collapse=",")
   
-  if(exists("fct",dot_args)){
+  # note the double ampersand here !!
+  # it denotes a short-circuit logical operator.
+  if(length(dot_args) != 0 && exists("fct",dot_args)){
     if(dot_args$fct){
       paste(sprintf("hstore('%s','%s')",
                     names(x),
